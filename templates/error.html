@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Erro</title>
+    <link rel="shortcut icon" href="/static/icon.ico" type="image/x-icon">
+     <style>
+        body { font-family: sans-serif; text-align: center; margin-top: 5em; background-color: #f8d7da; color: #721c24; }
+        .container { max-width: 600px; margin: auto; border: 1px solid #f5c6cb; padding: 2em; border-radius: 8px; background-color: white;}
+        code { background-color: #eee; padding: 2px 4px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>❌ Ocorreu um Erro</h1>
+        <p>Não foi possível completar sua solicitação.</p>
+        <p><strong>Detalhe do Erro:</strong></p>
+        <code>{{ detail }}</code>
+        <br><br>
+        <a href="/">Tentar Novamente</a>
+    </div>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Erro de Conexão</title>
+    <link rel="shortcut icon" href="/static/icon.ico" type="image/x-icon">
+     <style>
+        body { font-family: sans-serif; text-align: center; margin-top: 5em; background-color: #fffbe6; color: #856404; }
+        .container { max-width: 600px; margin: auto; border: 1px solid #ffeeba; padding: 2em; border-radius: 8px; background-color: white;}
+        h1 { color: #d68910; }
+        p { font-size: 1.1em; line-height: 1.6; }
+        code { background-color: #eee; padding: 2px 4px; border-radius: 4px; color: #333; }
+        .cta-button { display: inline-block; margin-top: 1.5em; padding: 12px 25px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; font-size: 1.1em; }
+        .cta-button:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 Erro de Conexão com o Navegador</h1>
+        <p>
+            A aplicação não conseguiu se comunicar com o navegador de automação.
+        </p>
+        <p>
+            Por favor, <strong>inicie o seu navegador de depuração</strong> e, em seguida, retorne ao menu principal para tentar novamente.
+        </p>
+        <a href="/" class="cta-button">Voltar ao Menu Principal</a>
+        <hr style="margin-top: 2em; border: 0; border-top: 1px solid #eee;">
+        <p style="font-size: 0.8em; color: #666;">Detalhe técnico: {{ detail }}</p>
+    </div>
+</body>
+</html>

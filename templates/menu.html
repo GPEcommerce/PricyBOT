@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>PricyBOT | Menu</title>
+    <link rel="shortcut icon" href="/static/icon.ico" type="image/x-icon">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 2em; background-color: #f4f6f9; color: #333; }
+        .container { max-width: 800px; margin: auto; }
+        .service-box { background-color: white; border: 1px solid #ddd; padding: 1.5em 2em; margin-bottom: 2em; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        h1 { text-align: center; color: #2c3e50; }
+        h2 { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 0.5em; margin-bottom: 1em; color: #34495e; }
+        label { display: block; margin-top: 1.2em; font-weight: 500; color: #555; }
+        input[type="text"], input[type="number"], input[type="file"], select, button { width: 100%; padding: 12px; margin-top: 0.5em; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; font-size: 1em; }
+        input[type="file"] { padding: 8px; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-size: 1.1em; font-weight: bold; transition: background-color 0.2s ease-in-out; }
+        button:hover { background-color: #0056b3; }
+        .hidden { display: none; }
+        /* Estilos para a Tela de Carregamento */
+        #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.75); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; color: white; text-align: center; }
+        .spinner { border: 8px solid rgba(255, 255, 255, 0.3); border-top: 8px solid #fff; border-radius: 50%; width: 60px; height: 60px; animation: spin 1.5s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Novos estilos para os botões de download */
+        .download-section { text-align: center; }
+        .btn-download {
+            display: inline-block;
+            text-decoration: none;
+            background-color: #28a745;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin: 10px;
+            font-weight: 500;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .btn-download:hover { background-color: #218838; }
+
+    </style>
+</head>
+<body>
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <h2 style="margin-top: 20px;">Processando sua solicitação...</h2>
+        <p>Isso pode levar alguns segundos. Por favor, aguarde.</p>
+    </div>
+
+    <div class="container">
+        <h1>PricyBOT - Menu de Automações</h1>
+
+        <div class="service-box">
+            <h2><img src="https://img.icons8.com/color/48/000000/shopee.png" alt="Shopee" style="vertical-align: middle; margin-right: 10px;"/>Pesquisa de Mercado Shopee</h2>
+            <form id="form-shopee" action="/shopee/pesquisar" method="post" enctype="multipart/form-data">
+                <label for="tipo_servico_shopee">Tipo de Serviço:</label>
+                <select id="tipo_servico_shopee" name="tipo_servico">
+                    <option value="viabilidade">Análise de Viabilidade</option>
+                    <option value="pma">Análise de PMA</option>
+                    <option value="manutencao_margem">Manutenção de Margem</option>
+                </select>
+
+                <div id="shopee-individual">
+                    <label for="termo_busca">Nome do Produto:</label>
+                    <input type="text" name="termo_busca" placeholder="Ex: Fone de ouvido bluetooth">
+                    
+                    <div id="shopee-preco-field" class="hidden">
+                        <label for="preco">Seu Preço (R$):</label>
+                        <input type="number" step="0.01" name="preco" placeholder="Ex: 99.90">
+                    </div>
+                </div>
+
+                <label for="arquivo_shopee">OU Envie um arquivo (.csv, .xlsx) para pesquisa em lote:</label>
+                <input type="file" name="arquivo" id="arquivo_shopee" accept=".csv, .xlsx">
+
+                <button type="submit">Pesquisar na Shopee</button>
+            </form>
+        </div>
+
+        <!-- Nova Seção de Download de Modelos -->
+        <div class="service-box">
+            <h2>Modelos de Arquivo para Pesquisa em Lote</h2>
+            <div class="download-section">
+                <a href="/static/modelo_arquivo_analise_viabilidade.xlsx" class="btn-download" download>Baixar Modelo para Análise de Viabilidade</a>
+                <a href="/static/modelo_arquivo_pma.xlsx" class="btn-download" download>Baixar Modelo para PMA</a>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const serviceSelect = document.getElementById('tipo_servico_shopee');
+            const precoField = document.getElementById('shopee-preco-field');
+            const formShopee = document.getElementById('form-shopee');
+            const loadingOverlay = document.getElementById('loading-overlay');
+
+            function toggleShopeeFields() {
+                const service = serviceSelect.value;
+                if (service === 'pma' || service === 'manutencao_margem') {
+                    precoField.classList.remove('hidden');
+                } else {
+                    precoField.classList.add('hidden');
+                }
+            }
+
+            // Adiciona o listener para o select
+            if (serviceSelect) {
+                serviceSelect.addEventListener('change', toggleShopeeFields);
+            }
+            
+            // Executa a função uma vez para definir o estado inicial
+            toggleShopeeFields();
+
+            // Adiciona o listener para o formulário
+            if (formShopee) {
+                formShopee.addEventListener('submit', function() {
+                    loadingOverlay.style.display = 'flex';
+                });
+            }
+
+            // Esconde o overlay se o usuário voltar para a página
+            window.addEventListener('pageshow', function(event) {
+                // A flag 'persisted' é verdadeira se a página for carregada do cache (ex: botão voltar)
+                if (event.persisted) {
+                    loadingOverlay.style.display = 'none';
+                }
+            });
+        });
+    </script>
+</body>
+</html>

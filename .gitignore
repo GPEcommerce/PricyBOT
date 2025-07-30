@@ -1,0 +1,45 @@
+# Arquivos de cache e compilados do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pastas de ambiente virtual
+.venv/
+venv/
+env/
+.env
+
+# Arquivos e pastas gerados pela aplicação
+uploads_temp/
+debug_screenshots/
+chrome_temp_profile/
+resultados/
+.dockerignore
+Dockerfile
+docker-compose.yml
+fastapi.conf
+
+# Arquivos de modelo e teste
+# Ignora todos os arquivos CSV e Excel na raiz do projeto.
+# Se você tiver arquivos de dados que DEVEM ser versionados,
+# desfaça a linha correspondente ou seja mais específico.
+*.csv
+*.xlsx
+*.xls
+
+# Arquivos de configuração de IDEs e editores
+.vscode/
+.idea/
+
+# Arquivos de sistema operacional
+.DS_Store
+._*
+
+# Arquivos de log
+*.log
+
+# Arquivos de distribuição/build do Python
+/dist/
+/build/
+*.egg-info/
