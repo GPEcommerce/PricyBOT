@@ -15,10 +15,6 @@ uploads_temp/
 debug_screenshots/
 chrome_temp_profile/
 resultados/
-.dockerignore
-Dockerfile
-docker-compose.yml
-fastapi.conf
 
 # Arquivos de modelo e teste
 # Ignora todos os arquivos CSV e Excel na raiz do projeto.

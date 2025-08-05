@@ -1,0 +1,27 @@
+# Ignorar o Dockerfile e o próprio .dockerignore
+Dockerfile
+.dockerignore
+
+# Ignorar pastas e arquivos do Git
+.git
+.gitignore
+
+# Ignorar pastas de ambiente virtual do Python
+.venv
+venv/
+env/
+
+# Ignorar o bytecode do Python e pastas de cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignorar pastas específicas do seu projeto que são geradas em tempo de execução
+uploads_temp/
+resultados/
+chrome_temp_profile/
+
+# Ignorar arquivos e pastas de configuração de IDEs
+.vscode/
+.idea/

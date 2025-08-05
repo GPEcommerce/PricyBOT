@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    container_name: navegador-fastapi
+    ports:
+      - "8000:8000"   # API FastAPI
+      - "6079:6079"   # Acesso visual via noVNC
+    environment:
+      - RUNNING_IN_DOCKER=true
+    restart: unless-stopped
