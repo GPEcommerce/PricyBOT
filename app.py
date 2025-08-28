@@ -18,17 +18,47 @@ from abrir_chrome import iniciar_chrome, esperar_chrome_pronto
 from core.utils import Utils # Usaremos para o screenshot
 import time
 
-# --- ESTADO GLOBAL DA APLICAÇÃO ---
-# Alteração: O estado agora é usado APENAS para gerenciar o fluxo de login em 2 etapas.
-# O navegador não é mais iniciado globalmente.
 app_state: Dict[str, Any] = {
-    "browser_connection_for_2fa": None,
-    "chrome_process_for_2fa": None
+    "browser_instance": None,
+    "chrome_process": None
 }
 
-# --- Alteração: O 'lifespan' foi removido, pois o navegador não é mais gerenciado globalmente.
+# --- ESTADO GLOBAL DA APLICAÇÃO ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Gerencia o ciclo de vida do processo do Chrome.
+    Inicia o navegador no startup e o encerra no shutdown.
+    """
+    print("🚀 [LIFESPAN] Iniciando o processo global do Chrome...")
+    processo = None
+    try:
+        # Inicia o processo do Chrome
+        processo = iniciar_chrome(headless=False) # Recomendo headless=True para servidor
+        if not processo or not esperar_chrome_pronto(timeout=45):
+            raise ConnectionError("Falha crítica: Não foi possível iniciar o Chrome no startup da aplicação.")
+
+        # Conecta ao navegador
+        browser = Chrome()
+        browser.connect()
+
+        # Armazena o processo e a instância do navegador no estado da aplicação
+        app_state["chrome_process"] = processo
+        app_state["browser_instance"] = browser
+        print("✅ [LIFESPAN] Navegador global pronto e conectado.")
+
+        yield # A aplicação fica rodando aqui
+
+    finally:
+        # Este código roda quando a aplicação é encerrada (ex: com Ctrl+C)
+        print("🔌 [LIFESPAN] Encerrando o processo global do Chrome...")
+        if app_state["chrome_process"] and app_state["chrome_process"].poll() is None:
+            app_state["chrome_process"].terminate()
+            app_state["chrome_process"].wait()
+            print("✔️ [LIFESPAN] Processo do Chrome encerrado com sucesso.")
+
 # Inicialização do FastAPI
-app = FastAPI(title="Automações de E-commerce")
+app = FastAPI(title="Automações de E-commerce", lifespan=lifespan)
 
 # Garante que as pastas necessárias para a aplicação existam
 os.makedirs("templates", exist_ok=True)
@@ -75,17 +105,12 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
     # --- Alteração: Lógica de gerenciamento do Chrome movida para dentro da rota ---
     service = None
     caminho_arquivo_temporario = None
-    chrome_process = None
     try:
-        # Inicia um navegador para esta pesquisa específica
-        print("🚀 Iniciando novo processo do Chrome para pesquisa...")
-        chrome_process = iniciar_chrome()
-        if not chrome_process or not esperar_chrome_pronto(timeout=45):
-            raise ConnectionError("Falha ao iniciar ou conectar ao Chrome no container.")
-        
-        browser = Chrome()
-        browser.connect()
-        # Fim da inicialização
+        browser = app_state.get("browser_instance")
+        if not browser:
+            # Isso acontece se o Chrome falhou ao iniciar com a aplicação
+            raise ConnectionError("O navegador principal não está disponível.")
+        # --- FIM DO CÓDIGO NOVO ---
 
         service = ShopeeMarketResearchService(browser)
         preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
@@ -125,28 +150,18 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
 
     finally:
         # --- Alteração: Garante que o navegador iniciado nesta rota seja sempre fechado ---
-        if service: await service.fechar()
-        if chrome_process and chrome_process.poll() is None:
-            print("🔌 Encerrando processo do Chrome da pesquisa...")
-            chrome_process.terminate()
-            chrome_process.wait()
+        if service:
+            await service.fechar()
         if caminho_arquivo_temporario and os.path.exists(caminho_arquivo_temporario):
-            os.remove(caminho_arquivo_temporario)
+                os.remove(caminho_arquivo_temporario)
 
 @app.post("/shopee/login_and_search", response_class=HTMLResponse)
 async def login_and_search(request: Request, shopee_user: str = Form(...), shopee_pass: str = Form(...), tipo_servico: str = Form(...), termo_busca: str = Form(None), preco: Optional[str] = Form(None)):
     service = None
-    chrome_process = None
-    manter_processo_aberto = False # Flag para o fluxo de 2FA
     try:
-        # Inicia um navegador para a tentativa de login
-        print("🚀 Iniciando novo processo do Chrome para login...")
-        chrome_process = iniciar_chrome()
-        if not chrome_process or not esperar_chrome_pronto(timeout=45):
-            raise ConnectionError("Falha ao iniciar ou conectar ao Chrome no container.")
-        
-        browser = Chrome()
-        browser.connect()
+        browser = app_state.get("browser_instance")
+        if not browser:
+            raise ConnectionError("O navegador principal não está disponível.")
 
         service = ShopeeMarketResearchService(browser)
         preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
@@ -165,10 +180,6 @@ async def login_and_search(request: Request, shopee_user: str = Form(...), shope
 
     except EmailVerificationRequiredException:
         print("Pausando a automação para aguardar verificação de e-mail.")
-        # --- Alteração: Salva o processo e a conexão no estado global para a próxima etapa ---
-        manter_processo_aberto = True
-        app_state["browser_connection_for_2fa"] = service.navegador
-        app_state["chrome_process_for_2fa"] = chrome_process
         pesquisa_original = {"tipo_servico": tipo_servico, "termo_busca": termo_busca, "preco": preco or ""}
         return templates.TemplateResponse("aguarde_email.html", {"request": request, "pesquisa": pesquisa_original})
     
@@ -184,24 +195,16 @@ async def login_and_search(request: Request, shopee_user: str = Form(...), shope
         return templates.TemplateResponse("error.html", {"request": request, "detail": str(e)}, status_code=500)
 
     finally:
-        # --- Alteração: Só fecha o processo se não for necessário para o 2FA ---
-        if not manter_processo_aberto:
-            if service: await service.fechar()
-            if chrome_process and chrome_process.poll() is None:
-                print("🔌 Encerrando processo do Chrome do login...")
-                chrome_process.terminate()
-                chrome_process.wait()
+            if service:
+                await service.fechar()
 
 @app.post("/api/shopee/add_search", response_class=JSONResponse)
 async def add_shopee_search(request: Request):
     service = None
-    chrome_process = None
     try:
-        # Inicia um navegador para esta pesquisa específica
-        print("🚀 Iniciando novo processo do Chrome para pesquisa API...")
-        chrome_process = iniciar_chrome()
-        if not chrome_process or not esperar_chrome_pronto(timeout=45):
-            raise ConnectionError("Falha ao iniciar ou conectar ao Chrome no container.")
+        browser = app_state.get("browser_instance")
+        if not browser:
+            raise ConnectionError("O navegador principal não está disponível.")
         
         browser = Chrome()
         browser.connect()
@@ -234,9 +237,5 @@ async def add_shopee_search(request: Request):
         return JSONResponse(content={"error": "An unexpected error occurred", "detail": str(e)}, status_code=500)
 
     finally:
-        # --- Alteração: Garante que o navegador iniciado nesta rota seja sempre fechado ---
-        if service: await service.fechar()
-        if chrome_process and chrome_process.poll() is None:
-            print("🔌 Encerrando processo do Chrome da pesquisa API...")
-            chrome_process.terminate()
-            chrome_process.wait()
+        if service:
+            await service.fechar()
