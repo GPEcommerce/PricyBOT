@@ -25,7 +25,7 @@ def esperar_chrome_pronto(host='127.0.0.1', port=9222, timeout=45):
     print(f"❌ Timeout: Chrome não respondeu na porta {port} após {timeout} segundos.")
     return False
 
-def iniciar_chrome(headless=False):
+def iniciar_chrome(headless=True):
     """
     Inicia um processo do Chrome com depuração remota.
     - No Windows: Roda o Chrome instalado localmente (visível ou headless).
@@ -64,7 +64,7 @@ def iniciar_chrome(headless=False):
             "--disable-gpu",
             "--no-first-run",
             "--no-default-browser-check",
-            "--window-size=1366,768"
+            "--window-size=1366,768",
         ]
         # Adiciona o modo headless apenas se solicitado
         if headless:
@@ -73,10 +73,10 @@ def iniciar_chrome(headless=False):
     # --- LÓGICA PARA LINUX (AMBIENTE DOCKER) ---
     else:
         print("🐳 Detectado ambiente Linux (Docker). Forçando modo headless.")
-        caminho_chrome = "/usr/bin/google-chrome"
+        caminho_chrome = "/usr/local/bin/chrome-headless-shell"
         comando = [
             caminho_chrome,
-            #"--headless=new",             # Sempre headless no Docker
+            "--headless=new",             # Sempre headless no Docker
             "--no-sandbox",               # Requisito para rodar como root no container
             "--disable-dev-shm-usage",    # Evita falhas por falta de memória compartilhada
             "--disable-gpu",              # Não há GPU no container
@@ -101,7 +101,7 @@ def iniciar_chrome(headless=False):
 if __name__ == "__main__":
     print("Iniciando o Chrome localmente para teste...")
     # Ao executar o script diretamente, ele usará a lógica para o seu SO atual.
-    processo_chrome = iniciar_chrome(headless=False) 
+    processo_chrome = iniciar_chrome(headless=True) 
     if processo_chrome:
         print(f"Chrome iniciado com PID: {processo_chrome.pid}. Pressione Ctrl+C para encerrar.")
         try:

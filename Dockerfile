@@ -1,62 +1,48 @@
-FROM python:3.10
+# 1. Usar uma imagem base Python mais leve (slim)
+FROM python:3.10-slim-bookworm
 
-# Define variáveis de ambiente
-ENV DISPLAY=:1
-
-# Atualiza pacotes e instala dependências
+# 2. Instalar apenas as dependências mínimas para o Google Chrome Headless
 RUN apt-get update && apt-get install -y \
     wget \
-    curl \
     unzip \
-    gnupg \
-    software-properties-common \
-    fonts-liberation \
-    libgbm1 \
-    xdg-utils \
-    libgtk-3-0 \
-    libx11-xcb1 \
-    libdbus-glib-1-2 \
     libnss3 \
-    libasound2 \
-    libxss1 \
+    libnspr4 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
-    libu2f-udev \
-    libvulkan1 \
-    xauth \
-    xvfb \
-    x11vnc \
-    fluxbox \
-    supervisor \
-    python3-pip && \
+    libxkbcommon0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libasound2 \
+    fonts-liberation \
+    libfontconfig1 \
+    libgl1 \
+    --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
-# Instala o Google Chrome
-RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-    apt-get update && \
-    apt-get install -y ./google-chrome-stable_current_amd64.deb && \
-    rm google-chrome-stable_current_amd64.deb
+# 3. Instala o chrome-headless-shell
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.154/linux64/chrome-headless-shell-linux64.zip && \
+    unzip chrome-headless-shell-linux64.zip && \
+    mv chrome-headless-shell-linux64 /opt/ && \
+    ln -s /opt/chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/chrome-headless-shell && \
+    rm chrome-headless-shell-linux64.zip
 
-# Instala o noVNC
-RUN git clone https://github.com/novnc/noVNC.git /opt/novnc && \
-    git clone https://github.com/novnc/websockify /opt/novnc/utils/websockify && \
-    chmod +x /opt/novnc/utils/novnc_proxy
-
-# Cria diretório da aplicação
+# 4. Cria diretório da aplicação
 WORKDIR /app
 
-# Copia arquivos do projeto
-COPY . /app
+# 5. Copia arquivos do projeto para o diretório de trabalho atual
+COPY . .
 
-# Instala dependências Python
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# 6. Instala dependências Python
+RUN pip install --no-cache-dir --upgrade pip && pip install -r requirements.txt
 
-# Copia config do supervisord
-COPY fastapi.conf /etc/supervisor/conf.d/fastapi.conf
+# 7. Expõe apenas a porta da API, já que não há mais VNC
+EXPOSE 8000
 
-# Expõe portas
-EXPOSE 8000 6079
-
-# Comando para rodar tudo com supervisord
-CMD ["/usr/bin/supervisord", "-n"]
+# 8. Comando para rodar a API diretamente com Uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

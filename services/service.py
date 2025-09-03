@@ -89,6 +89,68 @@ class ShopeeMarketResearchService:
         else:
             raise ValueError("Forneça um termo de busca ou um caminho de arquivo.")
 
+    async def retomar_e_verificar_aba(self):
+        """Retoma o controle de uma aba existente e verifica se o login foi bem-sucedido."""
+        if not self.tab or not self.scraper:
+            raise Exception("O serviço não foi inicializado corretamente com uma aba.")
+
+        print(f"Retomando o controle da aba ID: {self.tab.id}")
+        print("Aguardando a confirmação do e-mail e o carregamento da página principal...")
+
+        seletor_barra_pesquisa = 'input.shopee-searchbar-input__input'
+
+        status = await run_in_threadpool(
+            Utils.wait_for_multiple_elements,
+            self.tab,
+            {'success': seletor_barra_pesquisa},
+            timeout=120  # Timeout longo para dar tempo ao usuário de verificar o e-mail
+        )
+
+        if status != 'success':
+            await run_in_threadpool(Utils.take_screenshot, self.tab, 'verificacao_email_falhou')
+            raise ConnectionError("Não foi possível confirmar o login após a verificação de e-mail (a barra de pesquisa não apareceu).")
+
+        print("✅ Confirmação de e-mail bem-sucedida. Página principal carregada. Prosseguindo com a pesquisa.")
+
+    async def attach_to_tab(self, tab_id: str):
+        """Conecta a instância do serviço a uma aba já existente pelo seu ID."""
+        if not self.navegador or not self.navegador.browser:
+            raise ConnectionError("A instância do navegador não foi encontrada.")
+        
+        print(f"Tentando se anexar à aba ID: {tab_id}")
+        # PyChrome não tem um método direto "get_tab_by_id", então iteramos
+        tabs = await run_in_threadpool(self.navegador.browser.list_tab)
+        target_tab = next((t for t in tabs if t.id == tab_id), None)
+
+        if not target_tab:
+            raise ConnectionError(f"Aba com ID {tab_id} não foi encontrada. Pode ter sido fechada.")
+
+        self.tab = target_tab
+        await run_in_threadpool(self.tab.start) # Garante que estamos ouvindo os eventos da aba
+        self.scraper = ShopeePesquisaMercado(self.tab)
+        print(f"✅ Anexado com sucesso à aba ID: {self.tab.id}")
+
+    async def verificar_login_na_aba_atual(self):
+        """Verifica se o login foi bem-sucedido na aba atualmente anexada."""
+        if not self.tab:
+            raise Exception("Nenhuma aba anexada ao serviço.")
+        
+        print("Verificando se o login foi concluído na aba atual...")
+        seletor_sucesso = 'input.shopee-searchbar-input__input' # Barra de pesquisa
+        
+        status = await run_in_threadpool(
+            Utils.wait_for_multiple_elements,
+            self.tab,
+            {'success': seletor_sucesso},
+            timeout=120 # Damos 2 minutos para o usuário clicar no email e a página carregar
+        )
+
+        if status != 'success':
+            await run_in_threadpool(Utils.take_screenshot, self.tab, 'retomada_login_falhou')
+            raise ConnectionError("Login não foi confirmado a tempo na aba. A barra de pesquisa não foi encontrada.")
+        
+        print("✅ Login confirmado na aba.")
+
     async def analisar_pma(self, termo: str = None, preco_maximo: float = None, caminho_arquivo: str = None, imagens_ref: list = None):
         """Inicia uma análise de PMA."""
         await self._verificar_login_status()
@@ -97,7 +159,6 @@ class ShopeeMarketResearchService:
                 return self.scraper.gerar_pma(produto['Nome do Produto'], float(produto['Preço do Produto']), imgs_ref)
             return await self._executar_pesquisa_em_lote(caminho_arquivo, ['Nome do Produto', 'Preço do Produto'], scraper_callback, imagens_ref)
         elif termo and preco_maximo is not None:
-            # --- CORREÇÃO APLICADA ---
             await run_in_threadpool(self.scraper.realizar_busca, termo)
             return await run_in_threadpool(self.scraper.gerar_pma, termo, preco_maximo, imagens_ref)
         else:

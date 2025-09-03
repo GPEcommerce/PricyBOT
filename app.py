@@ -20,7 +20,7 @@ import time
 
 app_state: Dict[str, Any] = {
     "browser_instance": None,
-    "chrome_process": None
+    "chrome_process": None,
 }
 
 # --- ESTADO GLOBAL DA APLICAÇÃO ---
@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     processo = None
     try:
         # Inicia o processo do Chrome
-        processo = iniciar_chrome(headless=False) # Recomendo headless=True para servidor
+        processo = iniciar_chrome(headless=True)
         if not processo or not esperar_chrome_pronto(timeout=45):
             raise ConnectionError("Falha crítica: Não foi possível iniciar o Chrome no startup da aplicação.")
 
@@ -68,8 +68,6 @@ os.makedirs("debug_screenshots", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
-
-# --- Alteração: A função 'get_browser_connection' foi removida.
 
 # --- ENDPOINTS PRINCIPAIS DA APLICAÇÃO ---
 
@@ -158,16 +156,15 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
 @app.post("/shopee/login_and_search", response_class=HTMLResponse)
 async def login_and_search(request: Request, shopee_user: str = Form(...), shopee_pass: str = Form(...), tipo_servico: str = Form(...), termo_busca: str = Form(None), preco: Optional[str] = Form(None)):
     service = None
+    should_close_tab = True
     try:
         browser = app_state.get("browser_instance")
         if not browser:
             raise ConnectionError("O navegador principal não está disponível.")
 
         service = ShopeeMarketResearchService(browser)
-        preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
-
         await service.fazer_login(shopee_user, shopee_pass)
-
+        preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
         # Se o login for direto, executa a pesquisa
         resultados = []
         titulo_pesquisa = termo_busca
@@ -179,23 +176,33 @@ async def login_and_search(request: Request, shopee_user: str = Form(...), shope
         return _prepare_results_response(request, resultados, titulo_pesquisa, tipo_servico)
 
     except EmailVerificationRequiredException:
-        print("Pausando a automação para aguardar verificação de e-mail.")
+        print("Pausando automação para 2FA. A aba ficará aberta.")
+        should_close_tab = False
+        tab_id = service.tab.id if service and service.tab else None
+        if not tab_id:
+            return templates.TemplateResponse("error.html", {"request": request, "detail": "Não foi possível obter o ID da aba para verificação."})
+
         pesquisa_original = {"tipo_servico": tipo_servico, "termo_busca": termo_busca, "preco": preco or ""}
-        return templates.TemplateResponse("aguarde_email.html", {"request": request, "pesquisa": pesquisa_original})
+        return templates.TemplateResponse("aguarde_email.html", {
+            "request": request,
+            "pesquisa": pesquisa_original,
+            "tab_id": tab_id
+        })
+
     
     except LoginRequiredException as e:
         return templates.TemplateResponse("error.html", {"request": request, "detail": f"Falha no Login: {e}. Verifique suas credenciais e tente novamente."}, status_code=403)
     
     except ConnectionError as e:
         print(f"ERRO DE CONEXÃO DETECTADO NA ROTA /shopee/login_and_search: {e}")
-        return templates.TemplateResponse("browser_error.html", {"request": request, "detail": str(e)}, status_code=503)
+        return templates.TemplateResponse("error.html", {"request": request, "detail": str(e)}, status_code=500)
 
     except Exception as e:
         print(f"ERRO INESPERADO em /shopee/login_and_search: {e}")
         return templates.TemplateResponse("error.html", {"request": request, "detail": str(e)}, status_code=500)
 
     finally:
-            if service:
+            if service and should_close_tab:
                 await service.fechar()
 
 @app.post("/api/shopee/add_search", response_class=JSONResponse)
@@ -235,6 +242,36 @@ async def add_shopee_search(request: Request):
     except Exception as e:
         print(f"ERRO INESPERADO em /api/shopee/add_search: {e}")
         return JSONResponse(content={"error": "An unexpected error occurred", "detail": str(e)}, status_code=500)
+
+    finally:
+        if service:
+            await service.fechar()
+
+@app.post("/shopee/check_and_search", response_class=HTMLResponse)
+async def check_and_search(request: Request, tab_id: str = Form(...), tipo_servico: str = Form(...), termo_busca: str = Form(None), preco: Optional[str] = Form(None)):
+    service = None
+    try:
+        browser = app_state.get("browser_instance")
+        if not browser:
+            raise ConnectionError("O navegador principal não está disponível.")
+
+        service = ShopeeMarketResearchService(browser)
+        await service.attach_to_tab(tab_id)
+
+        await service.verificar_login_na_aba_atual()
+
+        preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
+        resultados = []
+        titulo_pesquisa = termo_busca
+        if termo_busca:
+            if tipo_servico == 'viabilidade': resultados = await service.analisar_viabilidade(termo=termo_busca)
+            elif tipo_servico == 'pma': resultados = await service.analisar_pma(termo=termo_busca, preco_maximo=preco_float)
+            elif tipo_servico == 'manutencao_margem': resultados = await service.analisar_manutencao_margem(termo=termo_busca, preco_nosso=preco_float)
+
+        return _prepare_results_response(request, resultados, titulo_pesquisa, tipo_servico)
+
+    except Exception as e:
+        return templates.TemplateResponse("error.html", {"request": request, "detail": f"Falha ao retomar a pesquisa: {e}"}, status_code=500)
 
     finally:
         if service:

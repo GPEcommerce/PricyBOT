@@ -1,12 +1,13 @@
 import re
+from urllib.parse import quote
 from core.exceptions import LoginRequiredException, EmailVerificationRequiredException
 from core.utils import Utils
 import requests
 import cv2
 import numpy as np
-import json
 from typing import List, Dict, Any, Callable
 import time
+import random
 
 class ShopeePesquisaMercado:
     """
@@ -86,6 +87,21 @@ class ShopeePesquisaMercado:
             return int(qtd)
         except (ValueError, TypeError):
             return 0
+    
+    def _type_like_human(self, selector: str, text: str):
+        """
+        Método auxiliar para digitar texto em um campo de forma a simular um humano,
+        com atrasos aleatórios entre os caracteres.
+        """
+        # Foca no campo de input antes de digitar
+        focus_script = f"document.querySelector('{selector}').focus();"
+        self.tab.call_method("Runtime.evaluate", expression=focus_script)
+        time.sleep(random.uniform(0.2, 0.5)) # Pequena pausa após focar
+
+        # Digita cada caractere individualmente
+        for char in text:
+            self.tab.call_method("Input.dispatchKeyEvent", type="char", text=char)
+            time.sleep(random.uniform(0.06, 0.18)) # Atraso entre 60 e 180 ms por caractere
 
     def _processar_resultados(
         self,
@@ -100,6 +116,7 @@ class ShopeePesquisaMercado:
         """
         item_selector = 'li.shopee-search-item-result__item:has(div.line-clamp-2)'
         Utils.scroll_pagina(self.tab, item_selector=item_selector)
+        time.sleep(random.uniform(1.0, 2.5))
         features_referencia = self._preparar_features_referencia(imagens_ref)
         produtos_coletados = self.coletar_elementos()
         lista_final = []
@@ -125,45 +142,75 @@ class ShopeePesquisaMercado:
 
     def realizar_busca(self, termo: str):
         """
-        Preenche o campo de busca, executa a pesquisa e verifica de forma inteligente
-        se o resultado foi a página de resultados esperada ou uma tela de login.
+        Tenta realizar a busca via barra de pesquisa (UI). Se a barra não for
+        encontrada em tempo hábil, utiliza a navegação direta por URL como fallback.
         """
-        print(f"Realizando busca pelo termo: '{termo}'...")
-        
-        busca_script = f'''
-        (function(){{
-            var input = document.querySelector('input.shopee-searchbar-input__input');
-            if (!input) return false;
-            input.focus();
-            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-            nativeInputValueSetter.call(input, `{termo.replace('`', '')}`);
-            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            var btn = input.closest('form')?.querySelector('button[type="button"]');
-            if (btn) {{ btn.click(); }}
-            return true;
-        }})();
-        '''
-        self.tab.call_method("Runtime.evaluate", expression=busca_script)
+        print(f"Iniciando busca por '{termo}'. Estratégia primária: Interação com a UI.")
 
-        # Sucesso: A lista de resultados. É um seletor bom.
-        # Falha: O campo de input de login. É um sinal inequívoco da página de login.
-        # Usamos a nova função aqui também para maior clareza
-        status = Utils.wait_for_multiple_elements(
+        seletor_barra_pesquisa = 'input.shopee-searchbar-input__input'
+        
+        # 1. Tenta encontrar a barra de pesquisa com um timeout curto (5 segundos)
+        status_barra = Utils.wait_for_multiple_elements(
+            self.tab,
+            selectors={'barra_encontrada': seletor_barra_pesquisa},
+            timeout=5 
+        )
+
+        # 2. Se a barra for encontrada, executa a busca via UI
+        if status_barra == 'barra_encontrada':
+            print("Barra de pesquisa encontrada. Realizando busca via digitação...")
+            try:
+                # Usa o método de digitação humana
+                self._type_like_human(seletor_barra_pesquisa, termo)
+                time.sleep(random.uniform(0.3, 0.7)) # Pequena pausa antes de clicar
+
+                # Clica no botão de busca
+                seletor_botao_busca = 'button.shopee-searchbar__search-button'
+                script_clique = f"document.querySelector('{seletor_botao_busca}').click();"
+                self.tab.call_method("Runtime.evaluate", expression=script_clique)
+                print("Busca via UI submetida.")
+
+            except Exception as e:
+                print(f"ERRO ao tentar busca via UI: {e}. Acionando fallback para URL direta.")
+                # Se a busca via UI falhar por algum motivo, vamos para o fallback
+                self._realizar_busca_por_url(termo)
+        
+        # 3. Se a barra NÃO for encontrada, aciona o fallback (plano B)
+        else:
+            print("AVISO: Barra de pesquisa não encontrada em 5 segundos.")
+            self._realizar_busca_por_url(termo)
+
+        # 4. Bloco de verificação final - Executa independentemente do método de busca
+        print("Aguardando carregamento da página de resultados...")
+        status_final = Utils.wait_for_multiple_elements(
             tab=self.tab,
             selectors={
                 'success': "ul.shopee-search-item-result__items",
                 'failure': 'input[name="loginKey"]'
-            }
+            },
+            timeout=30
         )
 
-        if status == 'failure':
+        if status_final == 'failure':
             Utils.take_screenshot(self.tab, file_name_prefix='busca_exigiu_login')
             raise LoginRequiredException("A Shopee redirecionou para a página de login durante a busca.")
-        elif status == 'timeout':
+        elif status_final == 'timeout':
             Utils.take_screenshot(self.tab, file_name_prefix='busca_timeout')
-            raise Exception("A página de resultados da busca não carregou a tempo (timeout). Verifique o print salvo.")
+            raise Exception("A página de resultados da busca não carregou a tempo (timeout).")
         
-        print("Busca realizada e página de resultados carregada com sucesso.")
+        print("Página de resultados carregada com sucesso.")
+
+    def _realizar_busca_por_url(self, termo: str):
+        """
+        Método auxiliar PRIVADO para realizar a busca via URL direta.
+        Serve como fallback para o método principal 'realizar_busca'.
+        """
+        print("Acionando fallback: busca direta por URL.")
+        termo_formatado = quote(termo)
+        url_pesquisa = f"https://shopee.com.br/search?keyword={termo_formatado}"
+        
+        print(f"Navegando para: {url_pesquisa}")
+        self.tab.call_method("Page.navigate", url=url_pesquisa, _timeout=30)
 
     def coletar_elementos(self) -> List[Dict[str, Any]]:
         coleta_script = '''
@@ -221,47 +268,28 @@ class ShopeePesquisaMercado:
         self.tab.call_method("Page.navigate", url=login_url, _timeout=30)
         
         Utils.wait_for_multiple_elements(self.tab, {'campo_login': 'input[name="loginKey"]'}, timeout=15)
-            
+        time.sleep(random.uniform(1.0, 2.0))    
         print(f"Tentando fazer login com o usuário: {usuario}...")
-        
-        usuario_json = json.dumps(usuario)
-        senha_json = json.dumps(senha)
-        script_preenchimento = f'''
-        (async function() {{
-            function fillInput(selector, value) {{
-                const input = document.querySelector(selector);
-                if (!input) return;
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                nativeInputValueSetter.call(input, value);
-                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            }}
-            fillInput('input[name="loginKey"]', {usuario_json});
-            fillInput('input[name="password"]', {senha_json});
-            await new Promise(resolve => setTimeout(resolve, 500));
-            const loginButton = document.querySelector('button.b5aVaf.PVSuiZ.Gqupku');
-            if (loginButton) loginButton.click();
-        }})();
-        '''
-        self.tab.call_method("Runtime.evaluate", expression=script_preenchimento, awaitPromise=True)
+        self._type_like_human('input[name="loginKey"]', usuario)
+        self._type_like_human('input[name="password"]', senha)
+        time.sleep(random.uniform(0.5, 1.2))
+        script_clique_login = "document.querySelector('button.b5aVaf.PVSuiZ.Gqupku').click();"
+        self.tab.call_method("Runtime.evaluate", expression=script_clique_login)
         print("Formulário de login submetido. Verificando resultado...")
 
-        # --- ALTERAÇÃO DE FLUXO ---
-        # Etapa 1: Verificar prioritariamente o sucesso do login (página principal carregada).
-        # Um bom indicador de sucesso é a barra de pesquisa ou o nome de usuário.
         seletor_sucesso = 'input.shopee-searchbar-input__input, .navbar__username'
         print(f"Aguardando por indicador de sucesso ({seletor_sucesso}) por até 10s...")
         
         status_inicial = Utils.wait_for_multiple_elements(
             tab=self.tab,
             selectors={'success': seletor_sucesso},
-            timeout=10  # Timeout mais curto para a verificação primária.
+            timeout=10
         )
 
         if status_inicial == 'success':
             print("✅ Login realizado com sucesso, página principal detectada.")
             return True
 
-        # Etapa 2: Se o sucesso não foi detectado, verificar os outros possíveis estados.
         print("Página principal não detectada em 10s. Verificando outros estados (2FA, erro, captcha)...")
 
         seletor_botao_2fa_email = "div > div > div > div > div > div > button"
@@ -274,7 +302,7 @@ class ShopeePesquisaMercado:
         status_secundario = Utils.wait_for_multiple_elements(
             tab=self.tab,
             selectors=possiveis_estados_secundarios,
-            timeout=10  # Timeout para os estados secundários.
+            timeout=10
         )
 
         if status_secundario == 'erro_credenciais':
@@ -282,9 +310,16 @@ class ShopeePesquisaMercado:
             raise LoginRequiredException("Falha no login: usuário ou senha incorretos.")
             
         elif status_secundario == 'pagina_verificacao_2fa':
-            print("Página de verificação (2FA) detectada.")
+            print("Página de verificação (2FA) detectada. Solicitando envio do e-mail...")
             Utils.take_screenshot(self.tab, file_name_prefix='login_verificacao_2fa')
-            # --- ALTERAÇÃO: Apenas levanta a exceção, sem clicar no botão ---
+            
+            script_clique_email = f"document.querySelector('{seletor_botao_2fa_email}').click();"
+            try:
+                self.tab.call_method("Runtime.evaluate", expression=script_clique_email)
+                print("Comando para enviar e-mail de verificação foi enviado.")
+            except Exception as e:
+                print(f"AVISO: Não foi possível clicar no botão de envio de e-mail: {e}")
+
             raise EmailVerificationRequiredException("Verificação por e-mail é necessária.")
             
         elif status_secundario == 'captcha_visivel' or status_secundario == 'timeout':

@@ -9,26 +9,86 @@
         .container { max-width: 600px; margin: auto; border: 1px solid #b8daff; padding: 2em; border-radius: 8px; background-color: white;}
         .cta-button { 
             display: inline-block;
-            background-color: #007bff; 
+            background-color: #28a745; 
             color: white; 
             border: none; 
             cursor: pointer; 
-            font-size: 1.1em; 
+            font-size: 1.2em; 
             padding: 0.8em 1.5em; 
             border-radius: 5px; 
             margin-top: 1.5em;
             text-decoration: none;
+            font-weight: bold;
         }
-        .cta-button:hover { background-color: #0056b3; }
+        .cta-button:hover { background-color: #218838; }
+
+        /* --- ESTILOS PARA A TELA DE CARREGAMENTO --- */
+        #loading-overlay { 
+            display: none; 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background-color: rgba(0, 0, 0, 0.75); 
+            z-index: 9999; 
+            justify-content: center; 
+            align-items: center; 
+            flex-direction: column; 
+            color: white; 
+            text-align: center; 
+        }
+        .spinner { 
+            border: 8px solid rgba(255, 255, 255, 0.3); 
+            border-top: 8px solid #3498db; 
+            border-radius: 50%; 
+            width: 60px; 
+            height: 60px; 
+            animation: spin 1.5s linear infinite; 
+        }
+        @keyframes spin { 
+            0% { transform: rotate(0deg); } 
+            100% { transform: rotate(360deg); } 
+        }
     </style>
 </head>
 <body>
+
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <h2 style="margin-top: 20px;">Verificando o login e realizando a pesquisa...</h2>
+        <p>Isso pode levar alguns segundos. Por favor, aguarde.</p>
+    </div>
+
     <div class="container">
         <h1>📧 Verificação de E-mail Necessária</h1>
-        <p>A Shopee enviou um link de verificação para o seu e-mail. Por favor, acesse seu e-mail e clique no link para autorizar este novo login.</p>
-        <p><strong>Após a confirmação, você precisará iniciar a pesquisa novamente.</strong></p>
+        <p>Acesse sua caixa de entrada, <strong>clique no link de autorização</strong> e aguarde a página da Shopee carregar completamente.</p>
+        <p>Depois, volte para esta aba e clique no botão abaixo para continuar.</p>
         
-        <a href="/" class="cta-button">Voltar ao Menu Principal</a>
+        <form id="resume-form" action="/shopee/check_and_search" method="post">
+            <input type="hidden" name="tab_id" value="{{ tab_id }}">
+            <input type="hidden" name="tipo_servico" value="{{ pesquisa.tipo_servico }}">
+            <input type="hidden" name="termo_busca" value="{{ pesquisa.termo_busca }}">
+            <input type="hidden" name="preco" value="{{ pesquisa.preco }}">
+
+            <button type="submit" class="cta-button">Já confirmei o e-mail, continuar a pesquisa!</button>
+        </form>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const resumeForm = document.getElementById('resume-form');
+            const loadingOverlay = document.getElementById('loading-overlay');
+
+            if (resumeForm && loadingOverlay) {
+                // Adiciona um "escutador" para o evento de submissão do formulário
+                resumeForm.addEventListener('submit', function() {
+                    // Quando o formulário for enviado, mostra a tela de carregamento
+                    loadingOverlay.style.display = 'flex';
+                });
+            }
+        });
+    </script>
+
 </body>
 </html>
