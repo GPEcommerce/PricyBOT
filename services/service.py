@@ -89,29 +89,6 @@ class ShopeeMarketResearchService:
         else:
             raise ValueError("Forneça um termo de busca ou um caminho de arquivo.")
 
-    async def retomar_e_verificar_aba(self):
-        """Retoma o controle de uma aba existente e verifica se o login foi bem-sucedido."""
-        if not self.tab or not self.scraper:
-            raise Exception("O serviço não foi inicializado corretamente com uma aba.")
-
-        print(f"Retomando o controle da aba ID: {self.tab.id}")
-        print("Aguardando a confirmação do e-mail e o carregamento da página principal...")
-
-        seletor_barra_pesquisa = 'input.shopee-searchbar-input__input'
-
-        status = await run_in_threadpool(
-            Utils.wait_for_multiple_elements,
-            self.tab,
-            {'success': seletor_barra_pesquisa},
-            timeout=120  # Timeout longo para dar tempo ao usuário de verificar o e-mail
-        )
-
-        if status != 'success':
-            await run_in_threadpool(Utils.take_screenshot, self.tab, 'verificacao_email_falhou')
-            raise ConnectionError("Não foi possível confirmar o login após a verificação de e-mail (a barra de pesquisa não apareceu).")
-
-        print("✅ Confirmação de e-mail bem-sucedida. Página principal carregada. Prosseguindo com a pesquisa.")
-
     async def attach_to_tab(self, tab_id: str):
         """Conecta a instância do serviço a uma aba já existente pelo seu ID."""
         if not self.navegador or not self.navegador.browser:
@@ -183,7 +160,6 @@ class ShopeeMarketResearchService:
         if not self.navegador or not self.navegador.browser:
             raise ConnectionError("A instância do navegador não foi encontrada ou não está conectada.")
         
-        # A chamada a list_tab() pode bloquear, então a colocamos em um threadpool
         tabs = await run_in_threadpool(self.navegador.browser.list_tab)
         if not tabs:
             raise ConnectionError("Nenhuma aba do navegador foi encontrada para retomar.")

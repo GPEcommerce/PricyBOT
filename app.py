@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     processo = None
     try:
         # Inicia o processo do Chrome
-        processo = iniciar_chrome(headless=True)
+        processo = iniciar_chrome(headless=False)
         if not processo or not esperar_chrome_pronto(timeout=45):
             raise ConnectionError("Falha crítica: Não foi possível iniciar o Chrome no startup da aplicação.")
 
@@ -78,8 +78,11 @@ async def menu_principal(request: Request):
 
 def _prepare_results_response(request: Request, resultados: List[Dict], titulo_pesquisa: str, tipo_servico: str) -> HTMLResponse:
     """Função auxiliar para preparar e renderizar a página de resultados."""
+    print("\n--- EXECUTANDO A VERSÃO CORRIGIDA DE _prepare_results_response ---")
+    print(f"DEBUG: Tipo de 'resultados': {type(resultados)}, Conteúdo: {resultados}\n")
+
     if not resultados:
-        headers, unique_states = [], []
+        headers, unique_states, unique_searches = [], [], []
     else:
         ORDEM_COLUNAS_DESEJADA = ["Foto", "Anuncio", "Nome", "Preço anunciado", "nosso_preco", "Preço sugerido", "Desvio", "diferenca_porcentagem", "diferenca_reais", "Quantidade de vendas", "vendas", "Giro", "Estado", "Link do anuncio", "link", "Pesquisa"]
         all_keys = set(key for item in resultados for key in item.keys())
@@ -88,6 +91,7 @@ def _prepare_results_response(request: Request, resultados: List[Dict], titulo_p
         headers = headers_ordenados + headers_extras
         unique_states = sorted(list(set(item.get("Estado", "") for item in resultados if item.get("Estado"))))
         unique_searches = sorted(list(set(item.get("Pesquisa", "") for item in resultados if item.get("Pesquisa"))))
+    
     return templates.TemplateResponse("resultados.html", {
         "request": request,
         "resultados": resultados,

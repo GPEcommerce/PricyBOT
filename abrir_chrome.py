@@ -3,6 +3,7 @@ import os
 import socket
 import platform
 import time
+import random
 
 def esperar_chrome_pronto(host='127.0.0.1', port=9222, timeout=45):
     """
@@ -25,7 +26,7 @@ def esperar_chrome_pronto(host='127.0.0.1', port=9222, timeout=45):
     print(f"❌ Timeout: Chrome não respondeu na porta {port} após {timeout} segundos.")
     return False
 
-def iniciar_chrome(headless=True):
+def iniciar_chrome(headless=False):
     """
     Inicia um processo do Chrome com depuração remota.
     - No Windows: Roda o Chrome instalado localmente (visível ou headless).
@@ -72,22 +73,36 @@ def iniciar_chrome(headless=True):
             
     # --- LÓGICA PARA LINUX (AMBIENTE DOCKER) ---
     else:
-        print("🐳 Detectado ambiente Linux (Docker). Forçando modo headless.")
-        caminho_chrome = "/usr/local/bin/chrome-headless-shell"
+        print("🐳 Detectado ambiente Linux (Docker). Usando Chrome completo com Xvfb.")
+        # O caminho para o Chrome completo instalado via apt-get
+        caminho_chrome = "/usr/bin/google-chrome-stable" 
+        
+        # Sorteia uma resolução de tela comum para evitar fingerprinting
+        resolucoes_comuns = ["1920,1080", "1366,768", "1440,900", "1536,864"]
+        resolucao_escolhida = random.choice(resolucoes_comuns)
+        print(f"🖥️ Usando resolução de tela: {resolucao_escolhida}")
+
         comando = [
             caminho_chrome,
-            "--headless=new",             # Sempre headless no Docker
-            "--no-sandbox",               # Requisito para rodar como root no container
-            "--disable-dev-shm-usage",    # Evita falhas por falta de memória compartilhada
-            "--disable-gpu",              # Não há GPU no container
-            "--disable-dbus",             # Evita erros de log desnecessários
-            "--remote-debugging-port=9222",
+            f"--remote-debugging-port=9222",
             f"--user-data-dir={user_data_dir}",
-            "--window-size=1366,768",
+            # Flags para parecer mais 'humano' e evitar detecção
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-infobars",
+            "--disable-blink-features=AutomationControlled", # Essencial!
+            "--start-maximized", # Inicia maximizado na tela virtual
+            # Flags técnicas para rodar bem no Docker
+            "--no-sandbox", # Pode ser necessário dependendo da configuração
+            "--disable-dev-shm-usage",
+            "--disable-gpu", # Não há GPU no Xvfb
+            f"--window-size={resolucao_escolhida}",
         ]
 
     try:
         print(f"▶️ Executando comando: {' '.join(comando)}")
+        # A variável de ambiente DISPLAY=:1 (definida no entrypoint.sh)
+        # direcionará a UI do Chrome para o Xvfb.
         processo = subprocess.Popen(comando)
         print(f"Processo do Chrome iniciado (PID: {processo.pid}).")
         return processo
@@ -101,7 +116,7 @@ def iniciar_chrome(headless=True):
 if __name__ == "__main__":
     print("Iniciando o Chrome localmente para teste...")
     # Ao executar o script diretamente, ele usará a lógica para o seu SO atual.
-    processo_chrome = iniciar_chrome(headless=True) 
+    processo_chrome = iniciar_chrome(headless=False) 
     if processo_chrome:
         print(f"Chrome iniciado com PID: {processo_chrome.pid}. Pressione Ctrl+C para encerrar.")
         try:

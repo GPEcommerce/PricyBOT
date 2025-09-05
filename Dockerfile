@@ -1,48 +1,51 @@
-# 1. Usar uma imagem base Python mais leve (slim)
-FROM python:3.10-slim-bookworm
+# Use a full Debian base image
+FROM debian:bookworm
 
-# 2. Instalar apenas as dependências mínimas para o Google Chrome Headless
-RUN apt-get update && apt-get install -y \
-    wget \
-    unzip \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libxkbcommon0 \
-    libcups2 \
-    libdrm2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libasound2 \
-    fonts-liberation \
-    libfontconfig1 \
-    libgl1 \
-    --no-install-recommends && \
+# Set non-interactive mode for installations
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Combine all installation steps into a single RUN command for efficiency
+RUN apt-get update && \
+    apt-get install -y \
+        wget \
+        gnupg \
+        xvfb \
+        python3 \
+        python3-pip \
+        dos2unix \
+        fonts-noto-color-emoji \
+        fonts-liberation \
+        fonts-indic \
+        fonts-thai-tlwg && \
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list && \
+    apt-get update && \
+    apt-get install -y google-chrome-stable && \
     rm -rf /var/lib/apt/lists/*
 
-# 3. Instala o chrome-headless-shell
-RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.154/linux64/chrome-headless-shell-linux64.zip && \
-    unzip chrome-headless-shell-linux64.zip && \
-    mv chrome-headless-shell-linux64 /opt/ && \
-    ln -s /opt/chrome-headless-shell-linux64/chrome-headless-shell /usr/local/bin/chrome-headless-shell && \
-    rm chrome-headless-shell-linux64.zip
+# Create the user and work directory first (still as root)
+RUN useradd --create-home appuser
+WORKDIR /home/appuser/app
 
-# 4. Cria diretório da aplicação
-WORKDIR /app
+# Copy application files and set ownership of the files
+COPY --chown=appuser:appuser . .
 
-# 5. Copia arquivos do projeto para o diretório de trabalho atual
-COPY . .
+# *** NEW STEP: Grant ownership of the work directory to the user ***
+RUN chown -R appuser:appuser /home/appuser/app
 
-# 6. Instala dependências Python
-RUN pip install --no-cache-dir --upgrade pip && pip install -r requirements.txt
+# Run file modifications and permission changes (still as root)
+RUN dos2unix /home/appuser/app/entrypoint.sh && \
+    chmod +x /home/appuser/app/entrypoint.sh
 
-# 7. Expõe apenas a porta da API, já que não há mais VNC
+# Install Python dependencies
+RUN pip install --no-cache-dir --break-system-packages --upgrade pip && \
+    pip install --no-cache-dir --break-system-packages -r requirements.txt
+
+# --- NOW, SWITCH TO THE NON-ROOT USER ---
+USER appuser
+
+# Expose the application port
 EXPOSE 8000
 
-# 8. Comando para rodar a API diretamente com Uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set the command to run on container start
+CMD ["/home/appuser/app/entrypoint.sh"]
