@@ -1,11 +1,6 @@
-// --- VARIÁVEIS GLOBAIS DE ESTADO ---
-// Guarda os dados originais recebidos do servidor e nunca muda.
 const originalFullData = typeof fullData !== 'undefined' ? [...fullData] : []; 
-// Nossa "fonte da verdade" atual. Esta lista será modificada por exclusões.
 let activeData = typeof fullData !== 'undefined' ? [...fullData] : []; 
-// Armazena os dados que estão sendo exibidos na tabela (sejam todos ou os filtrados)
 let currentDisplayData = [...activeData];
-// Guarda o estado atual da ordenação da tabela.
 let sortState = {
     columnKey: null,
     direction: 'asc'

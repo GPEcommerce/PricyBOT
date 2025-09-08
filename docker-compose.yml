@@ -1,9 +1,0 @@
-services:
-  app:
-    build: .
-    container_name: navegador-fastapi
-    ports:
-      - "8000:8000"
-    environment:
-      - RUNNING_IN_DOCKER=true
-    restart: unless-stopped
