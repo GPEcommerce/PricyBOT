@@ -1,197 +1,287 @@
-import os
+# services/service.py
+from __future__ import annotations
+import asyncio
+from typing import Any, Dict, List, Optional, Tuple
+
 import pandas as pd
-from fastapi.concurrency import run_in_threadpool
 
-# Importações de negócio e automação
-from core.chrome import Chrome
-from plataforms.shopee.shopee_pesquisa_mercado import ShopeePesquisaMercado
-from core.exceptions import LoginRequiredException, EmailVerificationRequiredException
-from core.utils import Utils
+from clients.shopee_search import ShopeeSearchClient
 
-def ler_arquivo(caminho_arquivo: str):
-    """Lê um arquivo .xlsx ou .csv e retorna um DataFrame."""
-    ext = os.path.splitext(caminho_arquivo)[1].lower()
+
+# ==============================
+# Helpers de transformação
+# ==============================
+
+def _img_formula(url: str) -> str:
+    return f'=IMAGEM("{url}")' if url else ""
+
+
+def _parse_float_maybe(v: Any) -> Optional[float]:
+    if v is None:
+        return None
     try:
-        if ext == '.xlsx': return pd.read_excel(caminho_arquivo, engine='openpyxl')
-        elif ext == '.csv':
-            try: return pd.read_csv(caminho_arquivo, sep=',')
-            except UnicodeDecodeError: return pd.read_csv(caminho_arquivo, sep=',', encoding='utf-8')
-        else: raise ValueError("Formato de arquivo não suportado. Use .xlsx ou .csv.")
-    except Exception as e:
-        raise Exception(f"Erro ao ler o arquivo: {e}")
+        if isinstance(v, str):
+            v = v.strip().replace("R$", "").replace(".", "").replace(",", ".")
+        return float(v)
+    except Exception:
+        return None
+
+
+# ==============================
+# Normalizações de saída
+# (PADRÃO DE COLUNAS COMPATÍVEL
+#  COM O FRONT EXISTENTE)
+# ==============================
+
+def _row_viabilidade(item: Dict[str, Any], termo: str) -> Dict[str, Any]:
+    """Linha de saída para análise de viabilidade."""
+    return {
+        "Foto": _img_formula(item.get("imagem_url", "")),
+        "Anuncio": item.get("titulo", ""),
+        "Nome": item.get("titulo", ""),
+        "Preço anunciado": item.get("preco", 0.0),
+        "Quantidade de vendas": item.get("vendidos_recente", 0),
+        "vendas": item.get("vendidos_recente", 0),
+        "Giro": item.get("vendidos_recente", 0),
+        "Estado": item.get("estado_loja", ""),
+        "Link do anuncio": item.get("produto_url", ""),
+        "link": item.get("produto_url", ""),
+        "Pesquisa": termo,
+    }
+
+
+def _row_pma(item: Dict[str, Any], termo: str, preco_maximo: float) -> Optional[Dict[str, Any]]:
+    """Linha de saída para análise de PMA (somente quando anunciado < PMA)."""
+    preco_anunciado = float(item.get("preco") or 0.0)
+    if preco_maximo is None or preco_anunciado >= preco_maximo:
+        return None
+    desvio = round(((preco_maximo - preco_anunciado) / preco_maximo) * 100, 2) if preco_maximo else 0.0
+
+    return {
+        "Foto": _img_formula(item.get("imagem_url", "")),
+        "Anuncio": item.get("titulo", ""),
+        "Nome": item.get("titulo", ""),
+        "Preço anunciado": preco_anunciado,
+        "Preço sugerido": float(preco_maximo),
+        "Desvio": desvio,
+        "Quantidade de vendas": item.get("vendidos_recente", 0),
+        "vendas": item.get("vendidos_recente", 0),
+        "Estado": item.get("estado_loja", ""),
+        "Link do anuncio": item.get("produto_url", ""),
+        "link": item.get("produto_url", ""),
+        "Pesquisa": termo,
+    }
+
+
+def _row_manutencao(item: Dict[str, Any], termo: str, nosso_preco: float) -> Optional[Dict[str, Any]]:
+    """Linha de saída para manutenção de margem (somente quando anunciado < nosso_preco)."""
+    preco_anunciado = float(item.get("preco") or 0.0)
+    if nosso_preco is None or preco_anunciado >= nosso_preco:
+        return None
+    diff_pct = round(((nosso_preco - preco_anunciado) / nosso_preco) * 100, 2) if nosso_preco else 0.0
+
+    return {
+        "Foto": _img_formula(item.get("imagem_url", "")),
+        "Anuncio": item.get("titulo", ""),
+        "Nome": item.get("titulo", ""),
+        "preco_anunciado": preco_anunciado,               # compat
+        "Preço anunciado": preco_anunciado,               # compat
+        "nosso_preco": float(nosso_preco),
+        "diferenca_porcentagem": diff_pct,
+        "diferenca_reais": round(nosso_preco - preco_anunciado, 2),
+        "Quantidade de vendas": item.get("vendidos_recente", 0),
+        "vendas": item.get("vendidos_recente", 0),
+        "Estado": item.get("estado_loja", ""),
+        "Link do anuncio": item.get("produto_url", ""),
+        "link": item.get("produto_url", ""),
+        "Pesquisa": termo,
+    }
+
+
+# ==============================
+# Leitura de arquivos (.csv/.xlsx)
+# Suporta colunas flexíveis:
+#  - termo: ["termo","produto","palavra","nome","descricao"]
+#  - preco: ["preco","preço","pma","nosso_preco","price"]
+# ==============================
+
+_TERMO_CANDIDATES = ["termo", "produto", "palavra", "nome", "descricao", "descrição"]
+_PRECO_CANDIDATES = ["preco", "preço", "pma", "nosso_preco", "price", "valor"]
+
+def _find_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    cols_lower = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand in cols_lower:
+            return cols_lower[cand]
+    return None
+
+
+def _read_terms_from_file(path: str) -> List[Tuple[str, Optional[float]]]:
+    """
+    Lê um arquivo .csv ou .xlsx e retorna uma lista de (termo, preco_opcional).
+    Para CSV, faz uma tentativa com ; e ,.
+    """
+    terms: List[Tuple[str, Optional[float]]] = []
+    if path.lower().endswith(".csv"):
+        tried = []
+        for sep in [";", ","]:
+            try:
+                df = pd.read_csv(path, sep=sep, dtype=str, encoding="utf-8", engine="python")
+                tried.append(sep)
+                break
+            except Exception:
+                df = None
+        if df is None:  # última tentativa "solta"
+            df = pd.read_csv(path, dtype=str, engine="python")
+
+    elif path.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(path, dtype=str, engine="openpyxl")
+    else:
+        raise ValueError("Formato de arquivo não suportado. Envie .csv ou .xlsx")
+
+    # Normaliza colunas
+    df.columns = [str(c).strip() for c in df.columns]
+    col_termo = _find_col(df, _TERMO_CANDIDATES)
+    col_preco = _find_col(df, _PRECO_CANDIDATES)
+
+    if not col_termo:
+        raise ValueError(
+            "Arquivo inválido: não encontrei coluna de termo. "
+            f"Tente uma das seguintes: {', '.join(_TERMO_CANDIDATES)}"
+        )
+
+    for _, row in df.iterrows():
+        termo = (row.get(col_termo) or "").strip()
+        if not termo:
+            continue
+        preco_val = None
+        if col_preco:
+            preco_val = _parse_float_maybe(row.get(col_preco))
+        terms.append((termo, preco_val))
+
+    return terms
+
+
+# ==============================
+# Serviço principal (HTTP-only)
+# ==============================
 
 class ShopeeMarketResearchService:
-    def __init__(self, browser: Chrome):
-        self.navegador: Chrome = browser
-        self.tab = None
-        self.scraper = None
+    """
+    Versão HTTP-only do serviço. Mantém as mesmas assinaturas públicas usadas pelo app:
+      - analisar_viabilidade(termo=...) ou (caminho_arquivo=...)
+      - analisar_pma(termo/preco_maximo) idem
+      - analisar_manutencao_margem(termo/preco_nosso) idem
+    """
 
-    async def _get_or_create_tab(self):
-        """Cria uma nova aba no navegador se nenhuma estiver ativa."""
-        if not self.tab:
-            print("Nenhuma aba ativa. Criando uma nova...")
-            self.tab = await run_in_threadpool(self.navegador.iniciar_navegador)
-            self.scraper = ShopeePesquisaMercado(self.tab)
+    def __init__(self, *, max_pages: int = 3, page_size: int = 50, delay_between_pages: float = 0.35):
+        self.client = ShopeeSearchClient()
+        self.max_pages = max_pages
+        self.page_size = page_size
+        self.delay_between_pages = delay_between_pages
 
-    async def _verificar_login_status(self):
-        """Verifica se o usuário está logado na Shopee antes de prosseguir."""
-        await self._get_or_create_tab()
-        print("Verificando status de login na página inicial...")
-        seletor_deslogado_universal = 'nav > ul > a:nth-child(6), input[name="loginKey"]'
-        
-        status = await run_in_threadpool(
-            Utils.wait_for_either_element,
-            self.tab,
-            '.navbar__username',
-            seletor_deslogado_universal,
-            timeout=15
-        )
-        if status == 'failure':
-            raise LoginRequiredException("Usuário não está logado na Shopee. Credenciais são necessárias.")
-        elif status == 'timeout':
-            await run_in_threadpool(Utils.take_screenshot, self.tab, 'erro_verificacao_inicial')
-            raise ConnectionError("Não foi possível determinar o status de login na Shopee. Um print foi salvo.")
-        print("Status: Usuário está LOGADO.")
+    # ---------- Núcleo de coleta ----------
+    async def _fetch_all_pages(self, termo: str) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        for page in range(self.max_pages):
+            payload = await self.client.search_keyword(termo, page=page, limit=self.page_size)
+            items = self.client.normalize_items(payload)
+            if not items:
+                break
+            results.extend(items)
+            # evita agressividade excessiva
+            await asyncio.sleep(self.delay_between_pages)
+        return results
 
-    async def fazer_login(self, usuario, senha):
-        """Executa o processo de login no scraper."""
-        await self._get_or_create_tab()
-        print("Iniciando o processo de login no scraper...")
-        await run_in_threadpool(self.scraper.fazer_login, usuario, senha)
-        print("Processo de login finalizado. Verificação de sucesso ocorrerá na próxima etapa.")
+    # ---------- Execução por termo ----------
+    async def _viabilidade_por_termo(self, termo: str) -> List[Dict[str, Any]]:
+        raw = await self._fetch_all_pages(termo)
+        out: List[Dict[str, Any]] = []
+        for it in raw:
+            # critério simples: usa vendidos recentes como proxy de giro
+            r = _row_viabilidade(it, termo)
+            out.append(r)
+        return out
 
-    async def _executar_pesquisa_em_lote(self, caminho_arquivo, colunas_necessarias, callback_scraper, *args):
-        """Executa uma pesquisa para cada linha de um arquivo."""
-        df = ler_arquivo(caminho_arquivo)
-        for coluna in colunas_necessarias:
-            if coluna not in df.columns:
-                raise ValueError(f"O arquivo precisa conter a coluna '{coluna}'.")
-        lista_produtos = df.to_dict('records')
-        todos_resultados = []
-        for produto in lista_produtos:
-            await run_in_threadpool(self.scraper.realizar_busca, produto['Nome do Produto'])
-            resultados_item = await run_in_threadpool(callback_scraper, produto, *args)
-            todos_resultados.extend(resultados_item)
-        return todos_resultados
+    async def _pma_por_termo(self, termo: str, preco_maximo: Optional[float]) -> List[Dict[str, Any]]:
+        if preco_maximo is None:
+            return []
+        raw = await self._fetch_all_pages(termo)
+        out: List[Dict[str, Any]] = []
+        for it in raw:
+            r = _row_pma(it, termo, float(preco_maximo))
+            if r:
+                out.append(r)
+        return out
 
-    async def analisar_viabilidade(self, termo: str = None, caminho_arquivo: str = None, imagens_ref: list = None):
-        """Inicia uma análise de viabilidade."""
-        await self._verificar_login_status()
+    async def _manutencao_por_termo(self, termo: str, preco_nosso: Optional[float]) -> List[Dict[str, Any]]:
+        if preco_nosso is None:
+            return []
+        raw = await self._fetch_all_pages(termo)
+        out: List[Dict[str, Any]] = []
+        for it in raw:
+            r = _row_manutencao(it, termo, float(preco_nosso))
+            if r:
+                out.append(r)
+        return out
+
+    # ---------- APIs públicas (mantidas) ----------
+    async def analisar_viabilidade(
+        self,
+        termo: Optional[str] = None,
+        caminho_arquivo: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if caminho_arquivo:
-            def scraper_callback(produto, imgs_ref):
-                return self.scraper.gerar_analise_viabilidade(produto['Nome do Produto'], imgs_ref)
-            return await self._executar_pesquisa_em_lote(caminho_arquivo, ['Nome do Produto'], scraper_callback, imagens_ref)
+            termos = _read_terms_from_file(caminho_arquivo)
+            resultados: List[Dict[str, Any]] = []
+            for t, _ in termos:
+                resultados.extend(await self._viabilidade_por_termo(t))
+            return resultados
         elif termo:
-            # --- CORREÇÃO APLICADA ---
-            # Passando 'termo' como argumento posicional para evitar confusão de dados.
-            await run_in_threadpool(self.scraper.realizar_busca, termo)
-            return await run_in_threadpool(self.scraper.gerar_analise_viabilidade, termo, imagens_ref)
+            return await self._viabilidade_por_termo(termo)
         else:
-            raise ValueError("Forneça um termo de busca ou um caminho de arquivo.")
+            return []
 
-    async def attach_to_tab(self, tab_id: str):
-        """Conecta a instância do serviço a uma aba já existente pelo seu ID."""
-        if not self.navegador or not self.navegador.browser:
-            raise ConnectionError("A instância do navegador não foi encontrada.")
-        
-        print(f"Tentando se anexar à aba ID: {tab_id}")
-        # PyChrome não tem um método direto "get_tab_by_id", então iteramos
-        tabs = await run_in_threadpool(self.navegador.browser.list_tab)
-        target_tab = next((t for t in tabs if t.id == tab_id), None)
-
-        if not target_tab:
-            raise ConnectionError(f"Aba com ID {tab_id} não foi encontrada. Pode ter sido fechada.")
-
-        self.tab = target_tab
-        await run_in_threadpool(self.tab.start) # Garante que estamos ouvindo os eventos da aba
-        self.scraper = ShopeePesquisaMercado(self.tab)
-        print(f"✅ Anexado com sucesso à aba ID: {self.tab.id}")
-
-    async def verificar_login_na_aba_atual(self):
-        """Verifica se o login foi bem-sucedido na aba atualmente anexada."""
-        if not self.tab:
-            raise Exception("Nenhuma aba anexada ao serviço.")
-        
-        print("Verificando se o login foi concluído na aba atual...")
-        seletor_sucesso = 'input.shopee-searchbar-input__input' # Barra de pesquisa
-        
-        status = await run_in_threadpool(
-            Utils.wait_for_multiple_elements,
-            self.tab,
-            {'success': seletor_sucesso},
-            timeout=120 # Damos 2 minutos para o usuário clicar no email e a página carregar
-        )
-
-        if status != 'success':
-            await run_in_threadpool(Utils.take_screenshot, self.tab, 'retomada_login_falhou')
-            raise ConnectionError("Login não foi confirmado a tempo na aba. A barra de pesquisa não foi encontrada.")
-        
-        print("✅ Login confirmado na aba.")
-
-    async def analisar_pma(self, termo: str = None, preco_maximo: float = None, caminho_arquivo: str = None, imagens_ref: list = None):
-        """Inicia uma análise de PMA."""
-        await self._verificar_login_status()
+    async def analisar_pma(
+        self,
+        termo: Optional[str] = None,
+        preco_maximo: Optional[float] = None,
+        caminho_arquivo: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if caminho_arquivo:
-            def scraper_callback(produto, imgs_ref):
-                return self.scraper.gerar_pma(produto['Nome do Produto'], float(produto['Preço do Produto']), imgs_ref)
-            return await self._executar_pesquisa_em_lote(caminho_arquivo, ['Nome do Produto', 'Preço do Produto'], scraper_callback, imagens_ref)
-        elif termo and preco_maximo is not None:
-            await run_in_threadpool(self.scraper.realizar_busca, termo)
-            return await run_in_threadpool(self.scraper.gerar_pma, termo, preco_maximo, imagens_ref)
+            termos = _read_terms_from_file(caminho_arquivo)
+            resultados: List[Dict[str, Any]] = []
+            for t, preco in termos:
+                if preco is None:
+                    # pula linhas sem preço
+                    continue
+                resultados.extend(await self._pma_por_termo(t, preco))
+            return resultados
+        elif termo:
+            return await self._pma_por_termo(termo, preco_maximo)
         else:
-            raise ValueError("Forneça um termo de busca e um preço, ou um caminho de arquivo.")
+            return []
 
-    async def analisar_manutencao_margem(self, termo: str = None, preco_nosso: float = None, caminho_arquivo: str = None, imagens_ref: list = None):
-        """Inicia uma análise de manutenção de margem."""
-        await self._verificar_login_status()
+    async def analisar_manutencao_margem(
+        self,
+        termo: Optional[str] = None,
+        preco_nosso: Optional[float] = None,
+        caminho_arquivo: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if caminho_arquivo:
-            def scraper_callback(produto, imgs_ref):
-                return self.scraper.gerar_analise_manutencao_margem(produto['Nome do Produto'], float(produto['Preço do Produto']), imgs_ref)
-            return await self._executar_pesquisa_em_lote(caminho_arquivo, ['Nome do Produto', 'Preço do Produto'], scraper_callback, imagens_ref)
-        elif termo and preco_nosso is not None:
-            # --- CORREÇÃO APLICADA ---
-            await run_in_threadpool(self.scraper.realizar_busca, termo)
-            return await run_in_threadpool(self.scraper.gerar_analise_manutencao_margem, termo, preco_nosso, imagens_ref)
+            termos = _read_terms_from_file(caminho_arquivo)
+            resultados: List[Dict[str, Any]] = []
+            for t, preco in termos:
+                if preco is None:
+                    continue
+                resultados.extend(await self._manutencao_por_termo(t, preco))
+            return resultados
+        elif termo:
+            return await self._manutencao_por_termo(termo, preco_nosso)
         else:
-            raise ValueError("Forneça um termo de busca e um preço, ou um caminho de arquivo.")
+            return []
 
-    async def retomar_e_verificar_aba(self):
-        """Retoma o controle de uma aba existente e verifica se o login foi bem-sucedido."""
-        if not self.navegador or not self.navegador.browser:
-            raise ConnectionError("A instância do navegador não foi encontrada ou não está conectada.")
-        
-        tabs = await run_in_threadpool(self.navegador.browser.list_tab)
-        if not tabs:
-            raise ConnectionError("Nenhuma aba do navegador foi encontrada para retomar.")
-        
-        self.tab = tabs[-1]
-        await run_in_threadpool(self.tab.start)
-        self.scraper = ShopeePesquisaMercado(self.tab)
-        
-        print(f"Retomando o controle da aba ID: {self.tab.id}")
-        print("Aguardando a confirmação do e-mail e o carregamento da página principal...")
-
-        seletor_barra_pesquisa = 'input.shopee-searchbar-input__input'
-        
-        status = await run_in_threadpool(
-            Utils.wait_for_multiple_elements,
-            self.tab,
-            {'success': seletor_barra_pesquisa},
-            timeout=120  # Timeout longo para dar tempo ao usuário
-        )
-        
-        if status != 'success':
-            await run_in_threadpool(Utils.take_screenshot, self.tab, 'verificacao_email_falhou')
-            raise ConnectionError("Não foi possível confirmar o login após a verificação de e-mail (a barra de pesquisa não apareceu).")
-            
-        print("✅ Confirmação de e-mail bem-sucedida. Página principal carregada. Prosseguindo com a pesquisa.")
-        
+    # ---------- Compatibilidade ----------
     async def fechar(self):
-        """Fecha a aba de pesquisa no navegador."""
-        if self.navegador and self.tab:
-            print(f"Fechando a aba da pesquisa (ID: {self.tab.id})...")
-            await run_in_threadpool(self.navegador.fechar_navegador)
-            self.tab = None
-            print("Aba fechada. O navegador principal continua rodando.")
-        else:
-            print("Não há aba de pesquisa para fechar.")
+        """Mantido por compatibilidade com o app atual (chamado no finally)."""
+        await self.client.aclose()
