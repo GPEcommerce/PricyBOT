@@ -9,14 +9,12 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-# Importações de negócio e automação
 from services.service import ShopeeMarketResearchService
 from core.exceptions import LoginRequiredException, EmailVerificationRequiredException
 from core.chrome import Chrome
 
 from abrir_chrome import iniciar_chrome, esperar_chrome_pronto
-from core.utils import Utils # Usaremos para o screenshot
-import time
+from core.utils import Utils
 
 app_state: Dict[str, Any] = {
     "browser_instance": None,
@@ -38,29 +36,24 @@ async def lifespan(app: FastAPI):
         if not processo or not esperar_chrome_pronto(timeout=45):
             raise ConnectionError("Falha crítica: Não foi possível iniciar o Chrome no startup da aplicação.")
 
-        # Conecta ao navegador
         browser = Chrome()
         browser.connect()
 
-        # Armazena o processo e a instância do navegador no estado da aplicação
         app_state["chrome_process"] = processo
         app_state["browser_instance"] = browser
         print("✅ [LIFESPAN] Navegador global pronto e conectado.")
 
-        yield # A aplicação fica rodando aqui
+        yield
 
     finally:
-        # Este código roda quando a aplicação é encerrada (ex: com Ctrl+C)
         print("🔌 [LIFESPAN] Encerrando o processo global do Chrome...")
         if app_state["chrome_process"] and app_state["chrome_process"].poll() is None:
             app_state["chrome_process"].terminate()
             app_state["chrome_process"].wait()
             print("✔️ [LIFESPAN] Processo do Chrome encerrado com sucesso.")
 
-# Inicialização do FastAPI
 app = FastAPI(title="Automações de E-commerce", lifespan=lifespan)
 
-# Garante que as pastas necessárias para a aplicação existam
 os.makedirs("templates", exist_ok=True)
 os.makedirs("static", exist_ok=True)
 os.makedirs("uploads_temp", exist_ok=True)
@@ -104,15 +97,12 @@ def _prepare_results_response(request: Request, resultados: List[Dict], titulo_p
 
 @app.post("/shopee/pesquisar", response_class=HTMLResponse)
 async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), termo_busca: str = Form(None), preco: Optional[str] = Form(None), arquivo: UploadFile = File(None)):
-    # --- Alteração: Lógica de gerenciamento do Chrome movida para dentro da rota ---
     service = None
     caminho_arquivo_temporario = None
     try:
         browser = app_state.get("browser_instance")
         if not browser:
-            # Isso acontece se o Chrome falhou ao iniciar com a aplicação
             raise ConnectionError("O navegador principal não está disponível.")
-        # --- FIM DO CÓDIGO NOVO ---
 
         service = ShopeeMarketResearchService(browser)
         preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
@@ -120,7 +110,6 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
         titulo_pesquisa = ""
 
         if arquivo and arquivo.filename:
-            # Lógica para pesquisa com arquivo
             titulo_pesquisa = f"Arquivo: {arquivo.filename}"
             caminho_arquivo_temporario = f"uploads_temp/{uuid.uuid4()}_{arquivo.filename}"
             with open(caminho_arquivo_temporario, "wb") as buffer:
@@ -129,7 +118,6 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
             elif tipo_servico == 'pma': resultados = await service.analisar_pma(caminho_arquivo=caminho_arquivo_temporario)
             elif tipo_servico == 'manutencao_margem': resultados = await service.analisar_manutencao_margem(caminho_arquivo=caminho_arquivo_temporario)
         elif termo_busca:
-            # Lógica para pesquisa com termo
             titulo_pesquisa = termo_busca
             if tipo_servico == 'viabilidade': resultados = await service.analisar_viabilidade(termo=termo_busca)
             elif tipo_servico == 'pma': resultados = await service.analisar_pma(termo=termo_busca, preco_maximo=preco_float)
@@ -151,7 +139,6 @@ async def pesquisar_shopee(request: Request, tipo_servico: str = Form(...), term
         return templates.TemplateResponse("error.html", {"request": request, "detail": str(e)}, status_code=500)
 
     finally:
-        # --- Alteração: Garante que o navegador iniciado nesta rota seja sempre fechado ---
         if service:
             await service.fechar()
         if caminho_arquivo_temporario and os.path.exists(caminho_arquivo_temporario):
@@ -169,7 +156,6 @@ async def login_and_search(request: Request, shopee_user: str = Form(...), shope
         service = ShopeeMarketResearchService(browser)
         await service.fazer_login(shopee_user, shopee_pass)
         preco_float = float(preco.replace(',', '.')) if preco and preco.strip() else None
-        # Se o login for direto, executa a pesquisa
         resultados = []
         titulo_pesquisa = termo_busca
         if termo_busca:
@@ -236,7 +222,6 @@ async def add_shopee_search(request: Request):
         return JSONResponse(content=resultados)
 
     except LoginRequiredException as e:
-        # Este fluxo não suporta login interativo.
         return JSONResponse(content={"error": f"Login Necessário: {e}. Por favor, faça login pela interface principal primeiro."}, status_code=403)
     
     except ConnectionError as e:

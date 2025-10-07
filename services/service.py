@@ -82,8 +82,6 @@ class ShopeeMarketResearchService:
                 return self.scraper.gerar_analise_viabilidade(produto['Nome do Produto'], imgs_ref)
             return await self._executar_pesquisa_em_lote(caminho_arquivo, ['Nome do Produto'], scraper_callback, imagens_ref)
         elif termo:
-            # --- CORREÇÃO APLICADA ---
-            # Passando 'termo' como argumento posicional para evitar confusão de dados.
             await run_in_threadpool(self.scraper.realizar_busca, termo)
             return await run_in_threadpool(self.scraper.gerar_analise_viabilidade, termo, imagens_ref)
         else:

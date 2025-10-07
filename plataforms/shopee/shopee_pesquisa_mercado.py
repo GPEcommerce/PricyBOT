@@ -8,7 +8,7 @@ import numpy as np
 import requests
 from urllib.parse import quote
 from typing import List, Dict, Any, Callable
-import threading # NOVO: Importado para gerenciar a espera assíncrona dos dados
+import threading
 
 from core.exceptions import LoginRequiredException, EmailVerificationRequiredException
 from core.utils import Utils
@@ -90,21 +90,22 @@ class ShopeePesquisaMercado:
         """
         Função que será chamada quando uma requisição de rede for COMPLETAMENTE finalizada.
         """
+        # --- MODIFICAÇÃO TEMPORÁRIA PARA INVESTIGAÇÃO ---
         request_id = kwargs.get("requestId")
         try:
             response_data = self.tab.call_method("Network.getResponseBody", requestId=request_id)
             body = response_data.get('body', '{}')
-            
+
             if '"items":' in body and '"total_count":' in body:
-                print(f"✅ API de busca finalizada e corpo da resposta obtido para requestId: {request_id}")
-                self.dados_api_busca = body
-                self.evento_busca_concluida.set()
+                if not self.evento_busca_concluida.is_set():
+                    if len(body) > 5000:
+                        self.dados_api_busca = body
+                        self.evento_busca_concluida.set()
 
         except Exception:
             pass
     
     def _remove_listener_compat(self, event_name, cb):
-        # Tenta nomes conhecidos
         for name in ("remove_listener", "del_listener"):
             func = getattr(self.tab, name, None)
             if callable(func):
@@ -115,7 +116,6 @@ class ShopeePesquisaMercado:
                     pass
                 except Exception:
                     pass
-        # Fallback: se existir, limpa todos
         clean = getattr(self.tab, "clear_listeners", None)
         if callable(clean):
             try:
@@ -165,11 +165,9 @@ class ShopeePesquisaMercado:
 
         for produto_bruto in produtos_coletados_api:
             try:
-                # A estrutura do item da API é diferente, então acessamos 'item_basic'
                 item_basic = produto_bruto.get('item_basic', {})
                 if not item_basic: continue
 
-                # ALTERADO: Constrói a URL da imagem a partir do ID
                 imagem_id = item_basic.get('image')
                 url_imagem = f"https://cf.shopee.com.br/file/{imagem_id}_tn" if imagem_id else ""
                 
@@ -177,7 +175,6 @@ class ShopeePesquisaMercado:
                     if not self._imagem_e_semelhante_orb(url_imagem, features_referencia, limiar_matches):
                         continue
                 
-                # O filtro_callback agora recebe o item_basic da API
                 produto_processado = filtro_callback(item_basic)
                 
                 if produto_processado:
@@ -306,11 +303,10 @@ class ShopeePesquisaMercado:
 
             return {
                 "Anuncio": item_basic.get('name', ''),
-                # Preço na API vem como um inteiro (ex: 4599), dividimos para ter o valor real
                 "Preço anunciado": item_basic.get('price', 0) / 100000,
                 "Estado": item_basic.get('shop_location', ''),
                 "Quantidade de vendas": item_basic.get('historical_sold', ''),
-                "Giro": giro, # A API de busca não fornece essa informação diretamente
+                "Giro": giro,
                 "Foto": f'=IMAGEM("{url_imagem}")',
                 "Link do anuncio": link_produto
             }
